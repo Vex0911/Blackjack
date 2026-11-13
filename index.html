@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crown Blackjack</title>
+<style>
+  body {
+    margin: 0; font-family: Arial, sans-serif; min-height: 100vh;
+    background: radial-gradient(circle, #1f6b3a, #0d3b1f);
+    color: #fff; display: flex; flex-direction: column; align-items: center;
+    padding: 20px; box-sizing: border-box;
+  }
+  h1 { margin: 0 0 10px; color: #ffd700; }
+  #balance {
+    font-size: 1.4em; background: rgba(0,0,0,0.4);
+    padding: 10px 20px; border-radius: 10px; margin-bottom: 20px;
+  }
+  .table {
+    width: 100%; max-width: 700px; min-height: 280px; box-sizing: border-box;
+    background: rgba(0,0,0,0.2); border: 3px solid #ffd700;
+    border-radius: 16px; padding: 15px; text-align: center;
+  }
+  .label { font-size: 14px; opacity: 0.8; margin-top: 8px; }
+  .hand {
+    display: flex; justify-content: center; flex-wrap: wrap;
+    gap: 8px; min-height: 110px; margin: 8px 0;
+  }
+  .card {
+    width: 70px; height: 100px; background: #fff; color: #000;
+    border-radius: 8px; display: flex; flex-direction: column;
+    justify-content: space-between; padding: 6px; box-sizing: border-box;
+    font-weight: bold; font-size: 18px; box-shadow: 0 3px 6px rgba(0,0,0,0.4);
+  }
+  .card.red { color: #c00; }
+  .card.back {
+    background: repeating-linear-gradient(45deg, #8b0000, #8b0000 8px, #b22222 8px, #b22222 16px);
+  }
+  .card .center { align-self: center; font-size: 24px; }
+  .controls { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+  button {
+    padding: 12px 18px; border: none; border-radius: 8px; font-size: 16px;
+    font-weight: bold; cursor: pointer; background: #ffd700; color: #222;
+  }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  input {
+    padding: 10px; width: 130px; border-radius: 6px; border: none;
+    font-size: 16px; text-align: center;
+  }
+  #msg { min-height: 28px; margin-top: 14px; font-size: 18px; font-weight: bold; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Crown Blackjack</h1>
+<div id="balance"></div>
+
+<div class="table">
+  <div class="label">Dealer</div>
+  <div class="hand" id="dealerHand"></div>
+  <div class="label">You <span id="playerTotal"></span></div>
+  <div class="hand" id="playerHand"></div>
+</div>
+
+<div class="controls" id="betControls">
+  <input type="number" id="betInput" min="1" value="50" placeholder="Bet (CR)">
+  <button id="dealBtn">Deal</button>
+  <button id="bonusBtn">Claim 500 CR Bonus</button>
+</div>
+
+<div class="controls" id="actionControls">
+  <button id="hitBtn">Hit</button>
+  <button id="standBtn">Stand</button>
+  <button id="doubleBtn">Double Down</button>
+</div>
+
+<div id="msg"></div>
+
+<script>
+const SAVE_KEY = 'crownBlackjackSave';
+const START_BALANCE = 1000;
+const BONUS_AMOUNT = 500;
+const BONUS_THRESHOLD = 50;
+
+let state = JSON.parse(localStorage.getItem(SAVE_KEY)) || { balance: START_BALANCE };
+let deck = [], player = [], dealer = [];
+let bet = 0, totalBet = 0, inRound = false, canDouble = false;
+
+const $ = id => document.getElementById(id);
+const fmt = n => n.toLocaleString() + ' CR';
+
+function save() { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); }
+
+function buildDeck() {
+  const suits = ['♠', '♥', '♦', '♣'];
+  const ranks = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+  deck = [];
+  for (let d = 0; d < 2; d++)
+    for (const s of suits)
+      for (const r of ranks) deck.push({ rank: r, suit: s });
+  for (let i = deck.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+}
+
+function draw() {
+  if (deck.length < 15) buildDeck();
+  return deck.pop();
+}
+
+function cardValue(card) {
+  if (card.rank === 'A') return 11;
+  if (['J','Q','K'].includes(card.rank)) return 10;
+  return parseInt(card.rank);
+}
+
+function handTotal(hand) {
+  let total = hand.reduce((sum, c) => sum + cardValue(c), 0);
+  let aces = hand.filter(c => c.rank === 'A').length;
+  while (total > 21 && aces > 0) { total -= 10; aces--; }
+  return total;
+}
+
+function isBlackjack(hand) { return hand.length === 2 && handTotal(hand) === 21; }
+
+function cardEl(card, hidden) {
+  const div = document.createElement('div');
+  if (hidden) { div.className = 'card back'; return div; }
+  div.className = 'card' + ((card.suit === '♥' || card.suit === '♦') ? ' red' : '');
+  div.innerHTML = `<span>${card.rank}${card.suit}</span><span class="center">${card.suit}</span><span style="transform:rotate(180deg)">${card.rank}${card.suit}</span>`;
+  return div;
+}
+
+function render(hideDealerHole = true) {
+  $('balance').textContent = 'Balance: ' + fmt(state.balance);
+
+  const dh = $('dealerHand');
+  dh.innerHTML = '';
+  dealer.forEach((c, i) => dh.appendChild(cardEl(c, hideDealerHole && i === 1)));
+
+  const ph = $('playerHand');
+  ph.innerHTML = '';
+  player.forEach(c => ph.appendChild(cardEl(c, false)));
+
+  $('playerTotal').textContent = player.length ? `(${handTotal(player)})` : '';
+
+  $('dealBtn').disabled = inRound;
+  $('betInput').disabled = inRound;
+  $('bonusBtn').style.display = (!inRound && state.balance < BONUS_THRESHOLD) ? 'inline-block' : 'none';
+  $('hitBtn').disabled = !inRound;
+  $('standBtn').disabled = !inRound;
+  $('doubleBtn').disabled = !inRound || !canDouble || state.balance < bet;
+}
+
+function setMsg(text, color = '#ffd700') {
+  $('msg').textContent = text;
+  $('msg').style.color = color;
+}
+
+function startRound() {
+  const amount = parseInt($('betInput').value, 10);
+  if (!amount || amount < 1) return setMsg('Enter a bet of at least 1 CR.', '#ff6b6b');
+  if (amount > state.balance) return setMsg('You cannot bet more than your balance.', '#ff6b6b');
+
+  bet = amount;
+  totalBet = amount;
+  state.balance -= amount;
+  save();
+
+  player = [draw(), draw()];
+  dealer = [draw(), draw()];
+  inRound = true;
+  canDouble = true;
+  setMsg('');
+
+  if (isBlackjack(player) || isBlackjack(dealer)) {
+    endRound();
+    return;
+  }
+  render();
+}
+
+function playerHit() {
+  if (!inRound) return;
+  canDouble = false;
+  player.push(draw());
+  if (handTotal(player) > 21) {
+    endRound();
+  } else {
+    render();
+  }
+}
+
+function playerDouble() {
+  if (!inRound || !canDouble || state.balance < bet) return;
+  state.balance -= bet;
+  totalBet += bet;
+  bet *= 2;
+  save();
+  player.push(draw());
+  canDouble = false;
+  if (handTotal(player) > 21) endRound();
+  else playerStand();
+}
+
+function playerStand() {
+  if (!inRound) return;
+  while (handTotal(dealer) < 17) dealer.push(draw());
+  endRound();
+}
+
+function endRound() {
+  inRound = false;
+  render(false);
+
+  const p = handTotal(player);
+  const d = handTotal(dealer);
+  const playerBJ = isBlackjack(player);
+  const dealerBJ = isBlackjack(dealer);
+  let payout = 0;
+  let text, color;
+
+  if (playerBJ && dealerBJ) {
+    payout = totalBet; text = 'Both have Blackjack. Push.'; color = '#ffd700';
+  } else if (playerBJ) {
+    payout = Math.floor(totalBet * 2.5); text = `Blackjack! You win ${fmt(payout - totalBet)}.`; color = '#4cff88';
+  } else if (dealerBJ) {
+    text = 'Dealer has Blackjack. You lose.'; color = '#ff6b6b';
+  } else if (p > 21) {
+    text = 'Bust! You lose.'; color = '#ff6b6b';
+  } else if (d > 21) {
+    payout = totalBet * 2; text = `Dealer busts! You win ${fmt(totalBet)}.`; color = '#4cff88';
+  } else if (p > d) {
+    payout = totalBet * 2; text = `You win ${fmt(totalBet)}.`; color = '#4cff88';
+  } else if (p < d) {
+    text = 'Dealer wins. You lose.'; color = '#ff6b6b';
+  } else {
+    payout = totalBet; text = 'Push. Your bet is returned.'; color = '#ffd700';
+  }
+
+  state.balance += payout;
+  save();
+  render(false);
+  setMsg(text, color);
+}
+
+function claimBonus() {
+  state.balance += BONUS_AMOUNT;
+  save();
+  setMsg(`You received ${fmt(BONUS_AMOUNT)}. Good luck!`, '#4cff88');
+  render();
+}
+
+$('dealBtn').onclick = startRound;
+$('hitBtn').onclick = playerHit;
+$('standBtn').onclick = playerStand;
+$('doubleBtn').onclick = playerDouble;
+$('bonusBtn').onclick = claimBonus;
+
+render();
+</script>
+</body>
+</html>
